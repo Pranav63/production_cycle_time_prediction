@@ -220,98 +220,157 @@ def create_enhanced_streamlit_ui(df, models, label_encoders, scaler, feature_imp
         with col1:
             st.subheader('Input Parameters')
             
-            # Get current date for temporal features
-            current_date = datetime.now()
-            
-            # Input fields with more information
-            product_type = st.selectbox('Product Type', 
-                                      label_encoders['Product_Type'].classes_,
-                                      help='Select the type of product to manufacture')
-            
-            batch_size = st.slider('Batch Size', 
-                                 min_value=100, max_value=1000, value=500,
-                                 help='Size of the production batch')
-            
-            raw_material_purity = st.slider('Raw Material Purity (%)', 
-                                          min_value=90, max_value=100, value=95,
-                                          help='Purity level of input materials')
-            
-            temperature = st.slider('Temperature Setting', 
-                                  min_value=150, max_value=250, value=200,
-                                  help='Process temperature setting')
-            
-            pressure = st.slider('Pressure Setting', 
-                               min_value=2, max_value=10, value=6,
-                               help='Process pressure setting')
-            
-            reactor_type = st.selectbox('Reactor Type', 
-                                      label_encoders['Reactor_Type'].classes_,
-                                      help='Type of reactor to use')
-            
-            equipment_age = st.slider('Equipment Age', 
-                                    min_value=0, max_value=10, value=5,
-                                    help='Age of equipment in years')
-            
-            maintenance_status = st.slider('Days Since Last Maintenance', 
-                                         min_value=0, max_value=30, value=15,
-                                         help='Days since last maintenance')
-            
-            operator_shift = st.selectbox('Operator Shift', 
-                                        label_encoders['Operator_Shift'].classes_,
-                                        help='Working shift')
-            
-            season = st.selectbox('Season', 
-                                label_encoders['Season'].classes_,
-                                help='Current season')
-            
-            quality_score = st.slider('Initial Quality Score', 
-                                    min_value=70, max_value=100, value=85,
-                                    help='Initial quality score')
-            
-            reactor_capacity = st.slider('Current Reactor Capacity (%)', 
-                                       min_value=60, max_value=100, value=80,
-                                       help='Current reactor capacity')
-            
-        with col2:
-            st.subheader('Predictions')
-            
-            # Create input data with all features including temporal ones
-            input_data = pd.DataFrame({
-                'Product_Type': [label_encoders['Product_Type'].transform([product_type])[0]],
-                'Batch_Size': [batch_size],
-                'Raw_Material_Purity': [raw_material_purity],
-                'Temperature_Setting': [temperature],
-                'Pressure_Setting': [pressure],
-                'Reactor_Type': [label_encoders['Reactor_Type'].transform([reactor_type])[0]],
-                'Equipment_Age': [equipment_age],
-                'Maintenance_Status': [maintenance_status],
-                'Operator_Shift': [label_encoders['Operator_Shift'].transform([operator_shift])[0]],
-                'Season': [label_encoders['Season'].transform([season])[0]],
-                'Initial_Quality_Score': [quality_score],
-                'Current_Reactor_Capacity': [reactor_capacity],
-                'Year': [current_date.year],
-                'Month': [current_date.month],
-                'DayOfWeek': [current_date.weekday()]
-            })
-
-            # Ensure column order matches training data
-            input_data = input_data[X_scaled.columns]
-            
-            # Scale the input data
-            input_scaled = scaler.transform(input_data)
-            
-            # Make predictions
-            for name, model in models.items():
-                pred = model.predict(input_scaled)[0]
+            # Create a form for batch input
+            with st.form("prediction_form"):
+                # Get current date for temporal features
+                current_date = datetime.now()
                 
-                # Calculate prediction interval (if applicable)
-                if hasattr(model, 'predict_proba'):
-                    lower, upper = calculate_prediction_interval(model, input_scaled)
-                    st.metric(f"{name} Prediction", 
-                            f"{pred:.2f} hours",
-                            f"95% CI: [{lower:.2f}, {upper:.2f}]")
-                else:
-                    st.metric(f"{name} Prediction", f"{pred:.2f} hours")
+                # Input fields with more information
+                product_type = st.selectbox('Product Type', 
+                                          label_encoders['Product_Type'].classes_,
+                                          help='Select the type of product to manufacture')
+                
+                batch_size = st.slider('Batch Size', 
+                                     min_value=100, max_value=1000, value=500,
+                                     help='Size of the production batch')
+                
+                raw_material_purity = st.slider('Raw Material Purity (%)', 
+                                              min_value=90, max_value=100, value=95,
+                                              help='Purity level of input materials')
+                
+                temperature = st.slider('Temperature Setting', 
+                                      min_value=150, max_value=250, value=200,
+                                      help='Process temperature setting')
+                
+                pressure = st.slider('Pressure Setting', 
+                                   min_value=2, max_value=10, value=6,
+                                   help='Process pressure setting')
+                
+                reactor_type = st.selectbox('Reactor Type', 
+                                          label_encoders['Reactor_Type'].classes_,
+                                          help='Type of reactor to use')
+                
+                equipment_age = st.slider('Equipment Age', 
+                                        min_value=0, max_value=10, value=5,
+                                        help='Age of equipment in years')
+                
+                maintenance_status = st.slider('Days Since Last Maintenance', 
+                                             min_value=0, max_value=30, value=15,
+                                             help='Days since last maintenance')
+                
+                operator_shift = st.selectbox('Operator Shift', 
+                                            label_encoders['Operator_Shift'].classes_,
+                                            help='Working shift')
+                
+                season = st.selectbox('Season', 
+                                    label_encoders['Season'].classes_,
+                                    help='Current season')
+                
+                quality_score = st.slider('Initial Quality Score', 
+                                        min_value=70, max_value=100, value=85,
+                                        help='Initial quality score')
+                
+                reactor_capacity = st.slider('Current Reactor Capacity (%)', 
+                                           min_value=60, max_value=100, value=80,
+                                           help='Current reactor capacity')
+                
+                # Submit button
+                submitted = st.form_submit_button("Make Predictions")
+        
+        with col2:
+            if submitted:
+                st.subheader('Predictions')
+                
+                # Create input data with all features including temporal ones
+                input_data = pd.DataFrame({
+                    'Product_Type': [label_encoders['Product_Type'].transform([product_type])[0]],
+                    'Batch_Size': [batch_size],
+                    'Raw_Material_Purity': [raw_material_purity],
+                    'Temperature_Setting': [temperature],
+                    'Pressure_Setting': [pressure],
+                    'Reactor_Type': [label_encoders['Reactor_Type'].transform([reactor_type])[0]],
+                    'Equipment_Age': [equipment_age],
+                    'Maintenance_Status': [maintenance_status],
+                    'Operator_Shift': [label_encoders['Operator_Shift'].transform([operator_shift])[0]],
+                    'Season': [label_encoders['Season'].transform([season])[0]],
+                    'Initial_Quality_Score': [quality_score],
+                    'Current_Reactor_Capacity': [reactor_capacity],
+                    'Year': [current_date.year],
+                    'Month': [current_date.month],
+                    'DayOfWeek': [current_date.weekday()]
+                })
+                
+                # Ensure column order matches training data
+                input_data = input_data[X_scaled.columns]
+                
+                # Scale the input data
+                input_scaled = scaler.transform(input_data)
+                
+                # Create columns for model predictions
+                pred_cols = st.columns(len(models))
+                
+                # Make predictions with all models
+                for idx, (name, model) in enumerate(models.items()):
+                    with pred_cols[idx]:
+                        pred = model.predict(input_scaled)[0]
+                        
+                        # Add confidence intervals if available
+                        if hasattr(model, 'predict_proba'):
+                            lower, upper = calculate_prediction_interval(model, input_scaled)
+                            st.metric(
+                                f"{name}",
+                                f"{pred:.2f} hrs",
+                                f"CI: [{lower:.2f}, {upper:.2f}]",
+                                help=f"Prediction from {name} model"
+                            )
+                        else:
+                            st.metric(
+                                f"{name}",
+                                f"{pred:.2f} hrs",
+                                help=f"Prediction from {name} model"
+                            )
+                
+                # Add a section for prediction analysis
+                st.subheader("Prediction Analysis")
+                
+                # Create expander for detailed analysis
+                with st.expander("View Detailed Analysis"):
+                    # Show feature contributions
+                    st.write("Feature Contributions:")
+                    
+                    # Use SHAP for feature contribution analysis
+                    best_model = models['Random Forest']  # or select based on performance
+                    explainer = shap.TreeExplainer(best_model)
+                    shap_values = explainer.shap_values(input_scaled)
+                    
+                    # Create a DataFrame with feature contributions
+                    contrib_df = pd.DataFrame({
+                        'Feature': X_scaled.columns,
+                        'Contribution': shap_values[0]
+                    }).sort_values('Contribution', key=abs, ascending=False)
+                    
+                    # Plot feature contributions
+                    fig = px.bar(contrib_df, 
+                               x='Contribution', 
+                               y='Feature',
+                               orientation='h',
+                               title='Feature Impact on Current Prediction')
+                    st.plotly_chart(fig)
+                    
+                    # Add recommendations based on predictions
+                    st.subheader("Optimization Recommendations")
+                    
+                    # Example recommendations based on feature contributions
+                    recommendations = []
+                    for idx, row in contrib_df.iterrows():
+                        if abs(row['Contribution']) > 0.1:  # threshold for significant impact
+                            if row['Contribution'] > 0:
+                                recommendations.append(f"Consider reducing {row['Feature']} to decrease cycle time")
+                            else:
+                                recommendations.append(f"Consider increasing {row['Feature']} to decrease cycle time")
+                    
+                    for rec in recommendations[:3]:  # Show top 3 recommendations
+                        st.info(rec)
     # Tab 2: Historical Analysis
     with tabs[1]:
         st.subheader('Historical Performance Analysis')
