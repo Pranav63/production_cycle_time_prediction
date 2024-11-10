@@ -1,498 +1,350 @@
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-import tensorflow as tf
 import streamlit as st
+import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
-from plotly.subplots import make_subplots
+from datetime import datetime
+import joblib
+import json
 import shap
-from datetime import datetime, timedelta
-# Data Generation
-def generate_synthetic_data(n_samples=1000):
-    np.random.seed(42)
-    
-    # Generate dates for historical analysis
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    dates = pd.date_range(start=start_date, periods=n_samples, freq='D')
-    
-    data = {
-        'Batch_ID': [f'BATCH_{i:04d}' for i in range(n_samples)],
-        'Date': dates,
-        'Product_Type': np.random.choice(['Type_A', 'Type_B', 'Type_C'], n_samples),
-        'Batch_Size': np.random.uniform(100, 1000, n_samples),
-        'Raw_Material_Purity': np.random.normal(95, 2, n_samples),
-        'Temperature_Setting': np.random.uniform(150, 250, n_samples),
-        'Pressure_Setting': np.random.uniform(2, 10, n_samples),
-        'Reactor_Type': np.random.choice(['R1', 'R2', 'R3'], n_samples),
-        'Equipment_Age': np.random.uniform(0, 10, n_samples),
-        'Maintenance_Status': np.random.uniform(0, 30, n_samples),
-        'Operator_Shift': np.random.choice(['Morning', 'Afternoon', 'Night'], n_samples),
-        'Season': np.random.choice(['Spring', 'Summer', 'Fall', 'Winter'], n_samples),
-        'Initial_Quality_Score': np.random.normal(85, 5, n_samples),
-        'Current_Reactor_Capacity': np.random.uniform(60, 100, n_samples)
+import os
+
+# Configure the app
+st.set_page_config(layout="wide", page_title="Process Manufacturing Predictor")
+
+# Cache data loading
+@st.cache_resource
+def load_models_and_artifacts():
+    """Load all saved models and preprocessors with proper error handling"""
+    required_files = {
+        'models/scaler.pkl': 'Scaler',
+        'models/label_encoders.pkl': 'Label Encoders',
+        'models/linear_regression_model.pkl': 'Linear Regression Model',
+        'models/random_forest_model.pkl': 'Random Forest Model',
+        'models/xgboost_model.pkl': 'XGBoost Model',
+        'models/lightgbm_model.pkl': 'LightGBM Model',
+        'artifacts/feature_importance.pkl': 'Feature Importance',
+        'artifacts/model_results.json': 'Model Results',
+        'artifacts/sample_data.pkl': 'Sample Data',
+        'artifacts/predictions.pkl': 'Predictions',
+        'artifacts/test_data.pkl': 'Test Data',
+        'artifacts/feature_names.json': 'Feature Names'
     }
     
-    # Generate target variable with some realistic relationships
-    cycle_time = (
-        data['Batch_Size'] * 0.1 +
-        (100 - data['Raw_Material_Purity']) * 2 +
-        np.random.normal(0, 2, n_samples) +
-        (data['Equipment_Age'] * 0.5) +
-        (data['Maintenance_Status'] * 0.1)
-    )
+    # Check if all required files exist
+    missing_files = []
+    for file_path, description in required_files.items():
+        if not os.path.exists(file_path):
+            missing_files.append(f"{description} ({file_path})")
     
-    # Add some non-linear relationships and seasonal effects
-    cycle_time += np.where(data['Product_Type'] == 'Type_A', 2, 
-                          np.where(data['Product_Type'] == 'Type_B', 4, 6))
-    
-    # Add seasonal variation
-    cycle_time += np.where(data['Season'] == 'Winter', 2,
-                          np.where(data['Season'] == 'Summer', -1, 0))
-    
-    data['Historical_Cycle_Time'] = np.maximum(cycle_time, 10)
-    
-    return pd.DataFrame(data)
-
-def preprocess_data(df):
-    # Create copy of dataframe
-    df_processed = df.copy()
-    
-    # Convert date to numerical features
-    df_processed['Year'] = df_processed['Date'].dt.year
-    df_processed['Month'] = df_processed['Date'].dt.month
-    df_processed['DayOfWeek'] = df_processed['Date'].dt.dayofweek
-    
-    # Label encoding for categorical variables
-    categorical_columns = ['Product_Type', 'Reactor_Type', 'Operator_Shift', 'Season']
-    label_encoders = {}
-    
-    for column in categorical_columns:
-        label_encoders[column] = LabelEncoder()
-        df_processed[column] = label_encoders[column].fit_transform(df_processed[column])
-    
-    # Split features and target
-    # Remove original Date column and non-feature columns
-    X = df_processed.drop(['Batch_ID', 'Historical_Cycle_Time', 'Date'], axis=1)
-    y = df_processed['Historical_Cycle_Time']
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
-    
-    return X_scaled, y, label_encoders, scaler
-
-# Model Training and Evaluation
-def train_and_evaluate_models(X_train, X_test, y_train, y_test):
-    models = {
-        'Linear Regression': LinearRegression(),
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'XGBoost': XGBRegressor(random_state=42),
-        'LightGBM': LGBMRegressor(random_state=42)
-    }
-    
-    results = {}
-    trained_models = {}
-    
-    for name, model in models.items():
-        # Train model
-        model.fit(X_train, y_train)
-        trained_models[name] = model
+    if missing_files:
+        st.error("Missing required files:")
+        for file in missing_files:
+            st.error(f"- {file}")
+        st.error("""
+        Please run train_models.py first to generate all required artifacts.
         
-        # Make predictions
-        y_pred = model.predict(X_test)
+        Command:
+        ```
+        python train_models.py
+        ```
+        """)
+        st.stop()
+    
+    try:
+        artifacts = {}
         
-        # Calculate metrics
-        results[name] = {
-            'MAE': mean_absolute_error(y_test, y_pred),
-            'MSE': mean_squared_error(y_test, y_pred),
-            'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
-            'R2': r2_score(y_test, y_pred)
+        # Load all artifacts with proper error handling
+        artifacts['sample_data'] = pd.read_pickle('artifacts/sample_data.pkl')
+        artifacts['scaler'] = joblib.load('models/scaler.pkl')
+        artifacts['label_encoders'] = joblib.load('models/label_encoders.pkl')
+        artifacts['feature_importance'] = pd.read_pickle('artifacts/feature_importance.pkl')
+        artifacts['predictions'] = pd.read_pickle('artifacts/predictions.pkl')
+        artifacts['test_data'] = joblib.load('artifacts/test_data.pkl')
+        
+        # Load model results
+        with open('artifacts/model_results.json', 'r') as f:
+            artifacts['model_results'] = json.load(f)
+        
+        # Load feature names
+        with open('artifacts/feature_names.json', 'r') as f:
+            artifacts['feature_names'] = json.load(f)
+        
+        # Load models
+        artifacts['models'] = {
+            'Linear Regression': joblib.load('models/linear_regression_model.pkl'),
+            'Random Forest': joblib.load('models/random_forest_model.pkl'),
+            'XGBoost': joblib.load('models/xgboost_model.pkl'),
+            'LightGBM': joblib.load('models/lightgbm_model.pkl')
         }
-    
-    return results, trained_models
-
-# Feature Importance Analysis
-def analyze_feature_importance(model, X):
-    if hasattr(model, 'feature_importances_'):
-        importance = model.feature_importances_
-    else:
-        importance = np.abs(model.coef_)
-    
-    feature_importance = pd.DataFrame({
-        'feature': X.columns,
-        'importance': importance
-    })
-    return feature_importance.sort_values('importance', ascending=False)
-
-def evaluate_models(models, X_train, X_test, y_train, y_test):
-    results = {}
-    predictions = {}
-    
-    for name, model in models.items():
-        # Cross-validation scores
-        cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='r2')
         
-        # Train the model
-        model.fit(X_train, y_train)
+        print("All artifacts loaded successfully!")
+        return artifacts
         
-        # Make predictions
-        y_pred_train = model.predict(X_train)
-        y_pred_test = model.predict(X_test)
-        predictions[name] = y_pred_test
-        
-        # Calculate metrics
-        results[name] = {
-            'MAE': mean_absolute_error(y_test, y_pred_test),
-            'MSE': mean_squared_error(y_test, y_pred_test),
-            'RMSE': np.sqrt(mean_squared_error(y_test, y_pred_test)),
-            'R2': r2_score(y_test, y_pred_test),
-            'MAPE': mean_absolute_percentage_error(y_test, y_pred_test) * 100,
-            'CV_R2_Mean': cv_scores.mean(),
-            'CV_R2_Std': cv_scores.std(),
-            'Train_R2': r2_score(y_train, y_pred_train)  # Check for overfitting
-        }
-    
-    return results, predictions
-
-# Historical Performance Visualizations
-def create_historical_visualizations(df, predictions, y_test):
-    visualizations = {}
+    except Exception as e:
+        st.error(f"Error loading artifacts: {str(e)}")
+        st.error("""
+        There was an error loading the required files. Please ensure:
+        1. You've run train_models.py first
+        2. All files were generated successfully
+        3. You have sufficient permissions to read the files
+        """)
+        st.stop()
+# Cache visualization creation
+@st.cache_data
+def create_cached_visualizations(_df, model_results):
+    """Create and cache essential visualizations"""
+    visuals = {}
     
     # 1. Cycle Time Trends
-    fig_trends = px.line(df, x='Date', y='Historical_Cycle_Time',
-                        color='Product_Type',
-                        title='Historical Cycle Time Trends by Product Type')
-    visualizations['trends'] = fig_trends
+    visuals['trends'] = px.line(
+        _df, 
+        x='Date', 
+        y='Historical_Cycle_Time',
+        color='Product_Type',
+        title='Historical Cycle Time Trends by Product Type'
+    ).update_layout(
+        template='plotly_white',
+        xaxis_title='Date',
+        yaxis_title='Cycle Time (hours)',
+        legend_title='Product Type'
+    )
     
-    # 2. Cycle Time Distribution
-    fig_dist = ff.create_distplot([df['Historical_Cycle_Time']], ['Cycle Time'],
-                                 bin_size=2)
-    fig_dist.update_layout(title='Cycle Time Distribution')
-    visualizations['distribution'] = fig_dist
+    # 2. Cycle Time Distribution by Product Type
+    visuals['distribution'] = px.histogram(
+        _df,
+        x='Historical_Cycle_Time',
+        color='Product_Type',
+        nbins=30,
+        title='Cycle Time Distribution by Product Type'
+    ).update_layout(
+        template='plotly_white',
+        xaxis_title='Cycle Time (hours)',
+        yaxis_title='Count'
+    )
     
-    # 3. Box Plot by Product Type and Season
-    fig_box = px.box(df, x='Product_Type', y='Historical_Cycle_Time',
-                     color='Season',
-                     title='Cycle Time Distribution by Product Type and Season')
-    visualizations['box_plot'] = fig_box
+    # 3. Box Plot
+    visuals['box_plot'] = px.box(
+        _df, 
+        x='Product_Type', 
+        y='Historical_Cycle_Time',
+        color='Season',
+        title='Cycle Time Distribution by Product Type and Season'
+    ).update_layout(
+        template='plotly_white',
+        xaxis_title='Product Type',
+        yaxis_title='Cycle Time (hours)'
+    )
     
-    # 4. Prediction vs Actual Scatter
-    scatter_data = []
-    for model_name, pred in predictions.items():
-        scatter_data.append(go.Scatter(x=y_test, y=pred,
-                                     mode='markers',
-                                     name=model_name))
+    # 4. Model Performance Comparison
+    metrics_df = pd.DataFrame(model_results).T
+    visuals['model_comparison'] = px.bar(
+        metrics_df,
+        barmode='group',
+        title='Model Performance Metrics'
+    ).update_layout(
+        template='plotly_white',
+        xaxis_title='Metric',
+        yaxis_title='Value'
+    )
     
-    fig_scatter = go.Figure(data=scatter_data)
-    fig_scatter.add_trace(go.Scatter(x=[y_test.min(), y_test.max()],
-                                   y=[y_test.min(), y_test.max()],
-                                   mode='lines',
-                                   name='Perfect Prediction',
-                                   line=dict(dash='dash')))
-    fig_scatter.update_layout(title='Predicted vs Actual Cycle Time',
-                            xaxis_title='Actual Cycle Time',
-                            yaxis_title='Predicted Cycle Time')
-    visualizations['scatter'] = fig_scatter
+    return visuals
+
+def style_metrics_table(metrics_df):
+    """Style the metrics dataframe with highlights"""
+    return metrics_df.style.background_gradient(cmap='YlOrRd', axis=0)\
+                          .highlight_max(axis=0, color='lightgreen')\
+                          .highlight_min(axis=0, color='lightpink')\
+                          .format(precision=4)
+
+def create_prediction_analysis(input_data, input_scaled, model, feature_names):
+    """Create prediction analysis visualizations"""
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(input_scaled)
     
-    return visualizations
-def create_enhanced_streamlit_ui(df, models, label_encoders, scaler, feature_importance, 
-                               model_results, visualizations, X_scaled):
-    st.set_page_config(layout="wide")
-    st.title('Process Manufacturing Cycle Time Prediction')
+    contrib_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Value': input_data.iloc[0],
+        'Impact': shap_values[0]
+    }).sort_values('Impact', key=abs, ascending=False)
     
-    # Create tabs for different sections
+    return contrib_df
+
+def create_prediction_ui(artifacts):
+    """Create the prediction interface"""
+    with st.form("prediction_form"):
+        cols = st.columns(3)
+        
+        with cols[0]:
+            product_type = st.selectbox(
+                'Product Type', 
+                artifacts['label_encoders']['Product_Type'].classes_,
+                help='Select the type of product to manufacture'
+            )
+            
+            batch_size = st.slider(
+                'Batch Size', 
+                min_value=100, 
+                max_value=1000, 
+                value=500,
+                help='Size of the production batch'
+            )
+            
+            raw_material_purity = st.slider(
+                'Raw Material Purity (%)', 
+                min_value=90, 
+                max_value=100, 
+                value=95
+            )
+            
+        with cols[1]:
+            temperature = st.slider('Temperature (°C)', 150, 250, 200)
+            pressure = st.slider('Pressure (bar)', 2, 10, 6)
+            reactor_type = st.selectbox(
+                'Reactor Type', 
+                artifacts['label_encoders']['Reactor_Type'].classes_
+            )
+            
+        with cols[2]:
+            equipment_age = st.slider('Equipment Age (years)', 0, 10, 5)
+            maintenance_status = st.slider('Days Since Maintenance', 0, 30, 15)
+            operator_shift = st.selectbox(
+                'Operator Shift', 
+                artifacts['label_encoders']['Operator_Shift'].classes_
+            )
+        
+        season = st.selectbox('Season', artifacts['label_encoders']['Season'].classes_)
+        quality_score = st.slider('Quality Score', 70, 100, 85)
+        reactor_capacity = st.slider('Reactor Capacity (%)', 60, 100, 80)
+        
+        submitted = st.form_submit_button("Predict Cycle Time")
+        
+    return (submitted, locals())
+
+def main():
+    st.title('🏭 Process Manufacturing Cycle Time Prediction')
+    
+    # Load all artifacts
+    with st.spinner('Loading models and data...'):
+        artifacts = load_models_and_artifacts()
+    
+    # Create cached visualizations
+    visualizations = create_cached_visualizations(
+        artifacts['sample_data'],
+        artifacts['model_results']
+    )
+    
+    # Create tabs
     tabs = st.tabs(['Prediction', 'Historical Analysis', 'Model Performance', 'Feature Analysis'])
     
-    # Tab 1: Prediction
+    # Prediction Tab
     with tabs[0]:
-        col1, col2 = st.columns([1, 2])
+        submitted, inputs = create_prediction_ui(artifacts)
         
-        with col1:
-            st.subheader('Input Parameters')
+        if submitted:
+            current_date = datetime.now()
             
-            # Create a form for batch input
-            with st.form("prediction_form"):
-                # Get current date for temporal features
-                current_date = datetime.now()
+            # Create input dataframe
+            input_data = pd.DataFrame({
+                'Product_Type': [artifacts['label_encoders']['Product_Type'].transform([inputs['product_type']])[0]],
+                'Batch_Size': [inputs['batch_size']],
+                'Raw_Material_Purity': [inputs['raw_material_purity']],
+                'Temperature_Setting': [inputs['temperature']],
+                'Pressure_Setting': [inputs['pressure']],
+                'Reactor_Type': [artifacts['label_encoders']['Reactor_Type'].transform([inputs['reactor_type']])[0]],
+                'Equipment_Age': [inputs['equipment_age']],
+                'Maintenance_Status': [inputs['maintenance_status']],
+                'Operator_Shift': [artifacts['label_encoders']['Operator_Shift'].transform([inputs['operator_shift']])[0]],
+                'Season': [artifacts['label_encoders']['Season'].transform([inputs['season']])[0]],
+                'Initial_Quality_Score': [inputs['quality_score']],
+                'Current_Reactor_Capacity': [inputs['reactor_capacity']],
+                'Year': [current_date.year],
+                'Month': [current_date.month],
+                'DayOfWeek': [current_date.weekday()]
+            })
+            
+            # Scale input
+            input_scaled = artifacts['scaler'].transform(input_data)
+            
+            # Make predictions
+            st.subheader('Model Predictions')
+            pred_cols = st.columns(len(artifacts['models']))
+            
+            for idx, (name, model) in enumerate(artifacts['models'].items()):
+                with pred_cols[idx]:
+                    pred = model.predict(input_scaled)[0]
+                    st.metric(
+                        f"{name}",
+                        f"{pred:.2f} hrs",
+                        help=f"Prediction from {name} model"
+                    )
+            
+            # Prediction Analysis
+            with st.expander("📊 Prediction Analysis", expanded=True):
+                # Get feature contributions
+                contrib_df = create_prediction_analysis(
+                    input_data,
+                    input_scaled,
+                    artifacts['models']['Random Forest'],
+                    artifacts['feature_names']
+                )
                 
-                # Input fields with more information
-                product_type = st.selectbox('Product Type', 
-                                          label_encoders['Product_Type'].classes_,
-                                          help='Select the type of product to manufacture')
+                # Display feature impacts
+                st.dataframe(
+                    contrib_df.style.background_gradient(subset=['Impact'], cmap='RdYlBu')
+                )
                 
-                batch_size = st.slider('Batch Size', 
-                                     min_value=100, max_value=1000, value=500,
-                                     help='Size of the production batch')
-                
-                raw_material_purity = st.slider('Raw Material Purity (%)', 
-                                              min_value=90, max_value=100, value=95,
-                                              help='Purity level of input materials')
-                
-                temperature = st.slider('Temperature Setting', 
-                                      min_value=150, max_value=250, value=200,
-                                      help='Process temperature setting')
-                
-                pressure = st.slider('Pressure Setting', 
-                                   min_value=2, max_value=10, value=6,
-                                   help='Process pressure setting')
-                
-                reactor_type = st.selectbox('Reactor Type', 
-                                          label_encoders['Reactor_Type'].classes_,
-                                          help='Type of reactor to use')
-                
-                equipment_age = st.slider('Equipment Age', 
-                                        min_value=0, max_value=10, value=5,
-                                        help='Age of equipment in years')
-                
-                maintenance_status = st.slider('Days Since Last Maintenance', 
-                                             min_value=0, max_value=30, value=15,
-                                             help='Days since last maintenance')
-                
-                operator_shift = st.selectbox('Operator Shift', 
-                                            label_encoders['Operator_Shift'].classes_,
-                                            help='Working shift')
-                
-                season = st.selectbox('Season', 
-                                    label_encoders['Season'].classes_,
-                                    help='Current season')
-                
-                quality_score = st.slider('Initial Quality Score', 
-                                        min_value=70, max_value=100, value=85,
-                                        help='Initial quality score')
-                
-                reactor_capacity = st.slider('Current Reactor Capacity (%)', 
-                                           min_value=60, max_value=100, value=80,
-                                           help='Current reactor capacity')
-                
-                # Submit button
-                submitted = st.form_submit_button("Make Predictions")
-        
-        with col2:
-            if submitted:
-                st.subheader('Predictions')
-                
-                # Create input data with all features including temporal ones
-                input_data = pd.DataFrame({
-                    'Product_Type': [label_encoders['Product_Type'].transform([product_type])[0]],
-                    'Batch_Size': [batch_size],
-                    'Raw_Material_Purity': [raw_material_purity],
-                    'Temperature_Setting': [temperature],
-                    'Pressure_Setting': [pressure],
-                    'Reactor_Type': [label_encoders['Reactor_Type'].transform([reactor_type])[0]],
-                    'Equipment_Age': [equipment_age],
-                    'Maintenance_Status': [maintenance_status],
-                    'Operator_Shift': [label_encoders['Operator_Shift'].transform([operator_shift])[0]],
-                    'Season': [label_encoders['Season'].transform([season])[0]],
-                    'Initial_Quality_Score': [quality_score],
-                    'Current_Reactor_Capacity': [reactor_capacity],
-                    'Year': [current_date.year],
-                    'Month': [current_date.month],
-                    'DayOfWeek': [current_date.weekday()]
-                })
-                
-                # Ensure column order matches training data
-                input_data = input_data[X_scaled.columns]
-                
-                # Scale the input data
-                input_scaled = scaler.transform(input_data)
-                
-                # Create columns for model predictions
-                pred_cols = st.columns(len(models))
-                
-                # Make predictions with all models
-                for idx, (name, model) in enumerate(models.items()):
-                    with pred_cols[idx]:
-                        pred = model.predict(input_scaled)[0]
-                        
-                        # Add confidence intervals if available
-                        if hasattr(model, 'predict_proba'):
-                            lower, upper = calculate_prediction_interval(model, input_scaled)
-                            st.metric(
-                                f"{name}",
-                                f"{pred:.2f} hrs",
-                                f"CI: [{lower:.2f}, {upper:.2f}]",
-                                help=f"Prediction from {name} model"
-                            )
-                        else:
-                            st.metric(
-                                f"{name}",
-                                f"{pred:.2f} hrs",
-                                help=f"Prediction from {name} model"
-                            )
-                
-                # Add a section for prediction analysis
-                st.subheader("Prediction Analysis")
-                
-                # Create expander for detailed analysis
-                with st.expander("View Detailed Analysis"):
-                    # Show feature contributions
-                    st.write("Feature Contributions:")
-                    
-                    # Use SHAP for feature contribution analysis
-                    best_model = models['Random Forest']  # or select based on performance
-                    explainer = shap.TreeExplainer(best_model)
-                    shap_values = explainer.shap_values(input_scaled)
-                    
-                    # Create a DataFrame with feature contributions
-                    contrib_df = pd.DataFrame({
-                        'Feature': X_scaled.columns,
-                        'Contribution': shap_values[0]
-                    }).sort_values('Contribution', key=abs, ascending=False)
-                    
-                    # Plot feature contributions
-                    fig = px.bar(contrib_df, 
-                               x='Contribution', 
-                               y='Feature',
-                               orientation='h',
-                               title='Feature Impact on Current Prediction')
-                    st.plotly_chart(fig)
-                    
-                    # Add recommendations based on predictions
-                    st.subheader("Optimization Recommendations")
-                    
-                    # Example recommendations based on feature contributions
-                    recommendations = []
-                    for idx, row in contrib_df.iterrows():
-                        if abs(row['Contribution']) > 0.1:  # threshold for significant impact
-                            if row['Contribution'] > 0:
-                                recommendations.append(f"Consider reducing {row['Feature']} to decrease cycle time")
-                            else:
-                                recommendations.append(f"Consider increasing {row['Feature']} to decrease cycle time")
-                    
-                    for rec in recommendations[:3]:  # Show top 3 recommendations
-                        st.info(rec)
-    # Tab 2: Historical Analysis
+                # Show recommendations
+                st.subheader("Optimization Recommendations")
+                for _, row in contrib_df.head(3).iterrows():
+                    if row['Impact'] > 0:
+                        st.warning(f"⬇️ Consider reducing {row['Feature']} (current: {row['Value']:.2f})")
+                    else:
+                        st.success(f"⬆️ Consider increasing {row['Feature']} (current: {row['Value']:.2f})")
+    
+    # Historical Analysis Tab
     with tabs[1]:
-        st.subheader('Historical Performance Analysis')
-        
-        # Time range selector with datetime conversion
-        date_range = st.date_input('Select Date Range',
-                                 [df['Date'].min().date(), df['Date'].max().date()],
-                                 min_value=df['Date'].min().date(),
-                                 max_value=df['Date'].max().date())
-        
-        # Convert date_range to pandas datetime
-        start_date = pd.to_datetime(date_range[0])
-        end_date = pd.to_datetime(date_range[1])
-        
-        # Filter data based on date range
-        mask = (df['Date'] >= start_date) & (df['Date'] <= end_date)
-        filtered_df = df[mask]
-        
-        # Display interactive visualizations
-        st.plotly_chart(visualizations['trends'])
+        st.plotly_chart(visualizations['trends'], use_container_width=True)
         
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(visualizations['distribution'])
+            st.plotly_chart(visualizations['distribution'], use_container_width=True)
         with col2:
-            st.plotly_chart(visualizations['box_plot'])
+            st.plotly_chart(visualizations['box_plot'], use_container_width=True)
     
-    # Tab 3: Model Performance
+    # Model Performance Tab
     with tabs[2]:
-        st.subheader('Model Performance Comparison')
-        
-        # Create detailed model performance comparison
-        metrics_df = pd.DataFrame(model_results).T
-        
-        # Display metrics table
-        st.dataframe(metrics_df.style.highlight_max(axis=0))
-        
-        # Display prediction vs actual scatter plot
-        st.plotly_chart(visualizations['scatter'])
-        
-        # Model performance analysis
-        col1, col2 = st.columns(2)
-        with col1:
-            # RMSE Comparison
-            fig_rmse = px.bar(metrics_df, y=metrics_df.index, x='RMSE',
-                            title='RMSE by Model',
-                            orientation='h')
-            st.plotly_chart(fig_rmse)
-        
-        with col2:
-            # R² Comparison
-            fig_r2 = px.bar(metrics_df, y=metrics_df.index, x='R2',
-                           title='R² Score by Model',
-                           orientation='h')
-            st.plotly_chart(fig_r2)
+        st.subheader("Model Performance Metrics")
+        metrics_df = pd.DataFrame(artifacts['model_results']).T
+        st.dataframe(style_metrics_table(metrics_df))
+        st.plotly_chart(visualizations['model_comparison'], use_container_width=True)
     
-    # Tab 4: Feature Analysis
+    # Feature Analysis Tab
     with tabs[3]:
-        st.subheader('Feature Importance Analysis')
+        st.subheader("Feature Importance")
+        st.plotly_chart(
+            px.bar(
+                artifacts['feature_importance'],
+                x='importance',
+                y='feature',
+                orientation='h',
+                title='Feature Importance (Random Forest)'
+            ),
+            use_container_width=True
+        )
         
-        # Display feature importance plot
-        fig_importance = px.bar(feature_importance,
-                              x='importance',
-                              y='feature',
-                              orientation='h',
-                              title='Feature Importance')
-        st.plotly_chart(fig_importance)
-        
-        # Add SHAP values analysis for the best model
-        best_model = models['Random Forest']  # Or select based on performance
-        st.subheader('SHAP Value Analysis')
-        
-        # Calculate SHAP values
-        explainer = shap.TreeExplainer(best_model)
-        shap_values = explainer.shap_values(X_scaled)
-        
-        # Plot SHAP summary
-        st.pyplot(shap.summary_plot(shap_values, X_scaled))
+        # SHAP Analysis
+        with st.expander("🔍 SHAP Analysis", expanded=True):
+            st.write("Global Feature Impact Analysis")
+            best_model = artifacts['models']['Random Forest']
+            explainer = shap.TreeExplainer(best_model)
+            
+            # Use sample of test data for SHAP analysis
+            sample_data = artifacts['test_data']['X_test'].sample(n=100, random_state=42)
+            shap_values = explainer.shap_values(sample_data)
+            
+            st.pyplot(shap.summary_plot(shap_values, sample_data))
 
-# Helper function for prediction intervals
-def calculate_prediction_interval(model, X, confidence=0.95):
-    # This is a simplified version - you might want to implement
-    # a more sophisticated method based on your specific needs
-    predictions = []
-    if hasattr(model, 'estimators_'):
-        for estimator in model.estimators_:
-            predictions.append(estimator.predict(X))
-    
-    predictions = np.array(predictions)
-    lower = np.percentile(predictions, (1 - confidence) / 2 * 100)
-    upper = np.percentile(predictions, (1 + confidence) / 2 * 100)
-    
-    return lower, upper
-
-# Main execution
 if __name__ == "__main__":
-    # Generate synthetic data
-    df = generate_synthetic_data(1000)
-    
-    # Preprocess data
-    X_scaled, y, label_encoders, scaler = preprocess_data(df)
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-    
-    # Initialize models
-    models = {
-        'Linear Regression': LinearRegression(),
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'XGBoost': XGBRegressor(random_state=42),
-        'LightGBM': LGBMRegressor(random_state=42)
-    }
-    
-    # Train and evaluate models
-    model_results, predictions = evaluate_models(models, X_train, X_test, y_train, y_test)
-    
-    # Get feature importance
-    feature_importance = analyze_feature_importance(models['Random Forest'], X_scaled)
-    
-    # Create visualizations
-    visualizations = create_historical_visualizations(df, predictions, y_test)
-    
-    # Create enhanced Streamlit UI
-    create_enhanced_streamlit_ui(df, models, label_encoders, scaler, 
-                               feature_importance, model_results, visualizations,X_scaled )
+    main()
