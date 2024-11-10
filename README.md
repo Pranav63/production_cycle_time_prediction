@@ -17,6 +17,8 @@ An end-to-end machine learning solution for predicting cycle times in process ma
 
 This project implements a machine learning solution to predict manufacturing cycle times. The system analyzes various production parameters to forecast completion times for manufacturing batches, helping optimize production planning and resource allocation.
 
+https://pctmodel.streamlit.app/
+
 ### Primary Objectives
 - Predict manufacturing cycle times with high accuracy
 - Identify key factors affecting production duration
