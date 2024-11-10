@@ -221,7 +221,74 @@ def create_prediction_ui(artifacts):
         submitted = st.form_submit_button("Predict Cycle Time")
         
     return (submitted, locals())
+def create_shap_plot(shap_values, features):
+    """Create SHAP summary plot using plotly instead of matplotlib"""
+    # Calculate mean absolute SHAP values for feature importance
+    feature_importance = np.abs(shap_values).mean(0)
+    feature_names = features.columns
+    
+    # Create DataFrame for plotting
+    shap_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': feature_importance
+    })
+    shap_df = shap_df.sort_values('Importance', ascending=True)
+    
+    # Create plotly figure
+    fig = go.Figure()
+    
+    # Add bar plot
+    fig.add_trace(go.Bar(
+        y=shap_df['Feature'],
+        x=shap_df['Importance'],
+        orientation='h',
+        marker_color='#2E86C1'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title='SHAP Feature Importance',
+        xaxis_title='Mean |SHAP| value',
+        yaxis_title='Feature',
+        template='plotly_white',
+        height=400 + len(feature_names) * 20
+    )
+    
+    return fig
 
+def create_detailed_shap_analysis(shap_values, features, max_display=10):
+    """Create detailed SHAP analysis with individual feature impacts"""
+    shap_df = pd.DataFrame(shap_values, columns=features.columns)
+    
+    figures = {}
+    
+    # Get top features by importance
+    mean_abs_shap = np.abs(shap_values).mean(0)
+    top_features = mean_abs_shap.argsort()[-max_display:][::-1]
+    
+    # Create violin plot for top features
+    fig_violin = go.Figure()
+    
+    for idx in top_features:
+        feature_name = features.columns[idx]
+        fig_violin.add_trace(go.Violin(
+            y=shap_df.iloc[:, idx],
+            name=feature_name,
+            box_visible=True,
+            meanline_visible=True
+        ))
+    
+    fig_violin.update_layout(
+        title='SHAP Value Distribution for Top Features',
+        yaxis_title='SHAP Value',
+        template='plotly_white',
+        showlegend=True
+    )
+    
+    figures['violin'] = fig_violin
+    
+    return figures
+    
 def main():
     st.title('🏭 Process Manufacturing Cycle Time Prediction')
     
@@ -320,23 +387,27 @@ def main():
         st.dataframe(style_metrics_table(metrics_df))
         st.plotly_chart(visualizations['model_comparison'], use_container_width=True)
     
-    # Feature Analysis Tab
+ # Feature Analysis Tab
     with tabs[3]:
-        st.subheader("Feature Importance")
+        st.subheader("Feature Importance Analysis")
+        
+        # Basic feature importance
         st.plotly_chart(
             px.bar(
                 artifacts['feature_importance'],
                 x='importance',
                 y='feature',
                 orientation='h',
-                title='Feature Importance (Random Forest)'
-            ),
+                title='Random Forest Feature Importance'
+            ).update_layout(template='plotly_white'),
             use_container_width=True
         )
         
         # SHAP Analysis
-        with st.expander("🔍 SHAP Analysis", expanded=True):
-            st.write("Global Feature Impact Analysis")
+        st.subheader("SHAP Analysis")
+        
+        # Calculate SHAP values for sample data
+        with st.spinner("Calculating SHAP values..."):
             best_model = artifacts['models']['Random Forest']
             explainer = shap.TreeExplainer(best_model)
             
@@ -344,7 +415,27 @@ def main():
             sample_data = artifacts['test_data']['X_test'].sample(n=100, random_state=42)
             shap_values = explainer.shap_values(sample_data)
             
-            st.pyplot(shap.summary_plot(shap_values, sample_data))
+            # Create and display SHAP summary plot
+            shap_summary = create_shap_plot(shap_values, sample_data)
+            st.plotly_chart(shap_summary, use_container_width=True)
+            
+            # Create and display detailed SHAP analysis
+            shap_details = create_detailed_shap_analysis(shap_values, sample_data)
+            st.plotly_chart(shap_details['violin'], use_container_width=True)
+        
+        # Add feature interaction analysis
+        st.subheader("Feature Interactions")
+        with st.expander("View Feature Interactions"):
+            # Create correlation heatmap
+            corr_matrix = artifacts['sample_data'].select_dtypes(include=[np.number]).corr()
+            
+            fig_corr = px.imshow(
+                corr_matrix,
+                title='Feature Correlation Heatmap',
+                color_continuous_scale='RdBu'
+            ).update_layout(template='plotly_white')
+            
+            st.plotly_chart(fig_corr, use_container_width=True)
 
 if __name__ == "__main__":
     main()
